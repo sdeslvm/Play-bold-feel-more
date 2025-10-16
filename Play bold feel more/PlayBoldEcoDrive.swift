@@ -1,61 +1,144 @@
-import Foundation
+import Combine
 import SwiftUI
+import WebKit
 
-struct ColorUtility {
-    static func convertToColor(hexRepresentation hexString: String) -> Color {
-        let sanitizedHex = hexString.trimmingCharacters(in: .alphanumerics.inverted)
-        var colorValue: UInt64 = 0
-        Scanner(string: sanitizedHex).scanHexInt64(&colorValue)
+// MARK: - Протоколы
 
-        let redComponent = Double((colorValue & 0xFF0000) >> 16) / 255.0
-        let greenComponent = Double((colorValue & 0x00FF00) >> 8) / 255.0
-        let blueComponent = Double(colorValue & 0x0000FF) / 255.0
-
-        return Color(red: redComponent, green: greenComponent, blue: blueComponent)
-    }
-
-    static func convertToUIColor(hexRepresentation hexString: String) -> UIColor {
-        let sanitizedHex = hexString.trimmingCharacters(in: .alphanumerics.inverted)
-        var colorValue: UInt64 = 0
-        Scanner(string: sanitizedHex).scanHexInt64(&colorValue)
-
-        let redComponent = CGFloat((colorValue & 0xFF0000) >> 16) / 255.0
-        let greenComponent = CGFloat((colorValue & 0x00FF00) >> 8) / 255.0
-        let blueComponent = CGFloat(colorValue & 0x0000FF) / 255.0
-
-        return UIColor(red: redComponent, green: greenComponent, blue: blueComponent, alpha: 1.0)
-    }
+/// Протокол для управления состоянием веб-загрузки
+protocol WebLoadable: AnyObject {
+    var state: PlayBoldWebStatus { get set }
+    func setConnectivity(_ available: Bool)
 }
 
-struct PlayBoldGameInitialView: View {
-    private var gameResourceURL: URL { URL(string: "https://playboldmore.com/load")! }
+/// Протокол для мониторинга прогресса загрузки
+protocol ProgressMonitoring {
+    func observeProgression()
+    func monitor(_ webView: WKWebView)
+}
 
-    var body: some View {
-        ZStack {
-            Color(hex: "#000")
-                .ignoresSafeArea()
-            PlayBoldEntryScreen(loader: .init(resourceURL: gameResourceURL))
+// MARK: - Основной загрузчик веб-представления
+
+/// Класс для управления загрузкой и состоянием веб-представления
+final class PlayBoldWebLoader: NSObject, ObservableObject, WebLoadable, ProgressMonitoring {
+    // MARK: - Свойства
+
+  @Published var state: PlayBoldWebStatus = .standby
+
+    let resource: URL
+    private var cancellables = Set<AnyCancellable>()
+    private var progressPublisher = PassthroughSubject<Double, Never>()
+    private var webViewProvider: (() -> WKWebView)?
+
+    // MARK: - Инициализация
+
+    init(resourceURL: URL) {
+        self.resource = resourceURL
+        super.init()
+        observeProgression()
+    }
+
+    // MARK: - Публичные методы
+
+    /// Привязка веб-представления к загрузчику
+    func attachWebView(factory: @escaping () -> WKWebView) {
+        webViewProvider = factory
+        triggerLoad()
+    }
+
+    /// Установка доступности подключения
+    func setConnectivity(_ available: Bool) {
+        switch (available, state) {
+        case (true, .noConnection):
+            triggerLoad()
+        case (false, _):
+            publish(.noConnection)
+        default:
+            break
         }
     }
+
+    // MARK: - Приватные методы загрузки
+
+    /// Запуск загрузки веб-представления
+    private func triggerLoad() {
+        guard let webView = webViewProvider?() else { return }
+
+        let request = URLRequest(url: resource, timeoutInterval: 12)
+        publish(.progressing(progress: 0))
+
+        webView.navigationDelegate = self
+        webView.load(request)
+        monitor(webView)
+    }
+
+    // MARK: - Методы мониторинга
+
+    /// Наблюдение за прогрессом загрузки
+    func observeProgression() {
+        progressPublisher
+            .removeDuplicates()
+            .sink { [weak self] progress in
+                guard let self else { return }
+                let newState: PlayBoldWebStatus = progress < 1.0 ? .progressing(progress: progress) : .finished
+                self.publish(newState)
+            }
+            .store(in: &cancellables)
+    }
+
+    /// Мониторинг прогресса веб-представления
+    func monitor(_ webView: WKWebView) {
+        webView.publisher(for: \.estimatedProgress)
+            .sink { [weak self] progress in
+                self?.progressPublisher.send(progress)
+            }
+            .store(in: &cancellables)
+    }
 }
 
-#Preview {
-    PlayBoldGameInitialView()
+// MARK: - Расширение для обработки навигации
+
+extension PlayBoldWebLoader: WKNavigationDelegate {
+    /// Обработка ошибок при навигации
+    func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+        handleNavigationError(error)
+    }
+
+    /// Обработка ошибок при provisional навигации
+    func webView(
+        _ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!,
+        withError error: Error
+    ) {
+        handleNavigationError(error)
+    }
+
+    // MARK: - Приватные методы обработки ошибок
+
+    /// Обобщенный метод обработки ошибок навигации
+    private func handleNavigationError(_ error: Error) {
+        publish(.failure(reason: error.localizedDescription))
+    }
 }
 
-extension Color {
-    init(hex hexValue: String) {
-        let sanitizedHex = hexValue.trimmingCharacters(in: .whitespacesAndNewlines)
-            .replacingOccurrences(of: "#", with: "")
-        var colorValue: UInt64 = 0
-        Scanner(string: sanitizedHex).scanHexInt64(&colorValue)
+// MARK: - Расширения для улучшения функциональности
 
-        self.init(
-            .sRGB,
-            red: Double((colorValue >> 16) & 0xFF) / 255.0,
-            green: Double((colorValue >> 8) & 0xFF) / 255.0,
-            blue: Double(colorValue & 0xFF) / 255.0,
-            opacity: 1.0
-        )
+extension PlayBoldWebLoader {
+    /// Создание загрузчика с безопасным URL
+    convenience init?(urlString: String) {
+        guard let url = URL(string: urlString) else { return nil }
+        self.init(resourceURL: url)
+    }
+
+    func publish(_ newState: PlayBoldWebStatus) {
+        updateState(newState)
+    }
+}
+
+// MARK: - Private helpers
+
+private extension PlayBoldWebLoader {
+    func updateState(_ newState: PlayBoldWebStatus) {
+        DispatchQueue.main.async {
+            self.state = newState
+        }
     }
 }

@@ -1,129 +1,141 @@
-import Combine
 import SwiftUI
+import UIKit
 import WebKit
 
-// MARK: - Протоколы
+// MARK: - Протоколы и расширения
 
-/// Протокол для управления состоянием веб-загрузки
-protocol WebLoadable: AnyObject {
-    var state: PlayBoldWebStatus { get set }
-    func setConnectivity(_ available: Bool)
+/// Протокол для создания градиентных представлений
+protocol GradientProviding {
+    func createGradientLayer() -> CAGradientLayer
 }
 
-/// Протокол для мониторинга прогресса загрузки
-protocol ProgressMonitoring {
-    func observeProgression()
-    func monitor(_ webView: WKWebView)
+// MARK: - Улучшенный контейнер с градиентом
+
+/// Кастомный контейнер с градиентным фоном
+final class GradientContainerView: UIView, GradientProviding {
+    // MARK: - Приватные свойства
+
+    private let gradientLayer = CAGradientLayer()
+
+    // MARK: - Инициализаторы
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        setupView()
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        setupView()
+    }
+
+    // MARK: - Методы настройки
+
+    private func setupView() {
+        layer.insertSublayer(createGradientLayer(), at: 0)
+    }
+
+    /// Создание градиентного слоя
+    func createGradientLayer() -> CAGradientLayer {
+        let layer = CAGradientLayer()
+        layer.colors = [
+            UIColor(hex: "#1BD8FD").cgColor,
+            UIColor(hex: "#0FC9FA").cgColor,
+        ]
+        layer.startPoint = CGPoint(x: 0, y: 0)
+        layer.endPoint = CGPoint(x: 1, y: 1)
+        return layer
+    }
+
+    // MARK: - Обновление слоя
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        gradientLayer.frame = bounds
+    }
 }
 
-// MARK: - Основной загрузчик веб-представления
+// MARK: - Расширения для цветов
 
-/// Класс для управления загрузкой и состоянием веб-представления
-final class PlayBoldWebLoader: NSObject, ObservableObject, WebLoadable, ProgressMonitoring {
+extension UIColor {
+    /// Инициализатор цвета из HEX-строки с улучшенной обработкой
+    convenience init(hex hexString: String) {
+        let sanitizedHex =
+            hexString
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: "#", with: "")
+            .uppercased()
+
+        var colorValue: UInt64 = 0
+        Scanner(string: sanitizedHex).scanHexInt64(&colorValue)
+
+        let redComponent = CGFloat((colorValue & 0xFF0000) >> 16) / 255.0
+        let greenComponent = CGFloat((colorValue & 0x00FF00) >> 8) / 255.0
+        let blueComponent = CGFloat(colorValue & 0x0000FF) / 255.0
+
+        self.init(red: redComponent, green: greenComponent, blue: blueComponent, alpha: 1.0)
+    }
+}
+
+// MARK: - Представление веб-вида
+
+struct PlayBoldWebViewBox: UIViewControllerRepresentable {
     // MARK: - Свойства
 
-    @Published var state: PlayBoldWebStatus = .standby
+    @ObservedObject var loader: PlayBoldWebLoader
+    var defaultOrientations: UIInterfaceOrientationMask = .landscape
 
-    let resource: URL
-    private var cancellables = Set<AnyCancellable>()
-    private var progressPublisher = PassthroughSubject<Double, Never>()
-    private var webViewProvider: (() -> WKWebView)?
+    // MARK: - Координатор
 
-    // MARK: - Инициализация
-
-    init(resourceURL: URL) {
-        self.resource = resourceURL
-        super.init()
-        observeProgression()
-    }
-
-    // MARK: - Публичные методы
-
-    /// Привязка веб-представления к загрузчику
-    func attachWebView(factory: @escaping () -> WKWebView) {
-        webViewProvider = factory
-        triggerLoad()
-    }
-
-    /// Установка доступности подключения
-    func setConnectivity(_ available: Bool) {
-        switch (available, state) {
-        case (true, .noConnection):
-            triggerLoad()
-        case (false, _):
-            state = .noConnection
-        default:
-            break
+    func makeCoordinator() -> PlayBoldWebCoordinator {
+        PlayBoldWebCoordinator { [weak loader] status in
+            loader?.publish(status)
         }
     }
 
-    // MARK: - Приватные методы загрузки
+    // MARK: - Создание представления
 
-    /// Запуск загрузки веб-представления
-    private func triggerLoad() {
-        guard let webView = webViewProvider?() else { return }
-
-        let request = URLRequest(url: resource, timeoutInterval: 12)
-        state = .progressing(progress: 0)
-
-        webView.navigationDelegate = self
-        webView.load(request)
-        monitor(webView)
+    func makeUIViewController(context: Context) -> PlayBoldBaseWebViewController {
+        let configuration = createWebViewConfiguration()
+        return PlayBoldBaseWebViewController(
+            defaultOrientations: defaultOrientations,
+            loader: loader,
+            coordinator: context.coordinator,
+            configuration: configuration
+        )
     }
 
-    // MARK: - Методы мониторинга
-
-    /// Наблюдение за прогрессом загрузки
-    func observeProgression() {
-        progressPublisher
-            .removeDuplicates()
-            .sink { [weak self] progress in
-                guard let self else { return }
-                self.state = progress < 1.0 ? .progressing(progress: progress) : .finished
-            }
-            .store(in: &cancellables)
+    func updateUIViewController(_ uiViewController: PlayBoldBaseWebViewController, context: Context) {
+        // Left intentionally blank; loader drives updates.
     }
 
-    /// Мониторинг прогресса веб-представления
-    func monitor(_ webView: WKWebView) {
-        webView.publisher(for: \.estimatedProgress)
-            .sink { [weak self] progress in
-                self?.progressPublisher.send(progress)
-            }
-            .store(in: &cancellables)
-    }
-}
+    // MARK: - Приватные методы настройки
 
-// MARK: - Расширение для обработки навигации
+    private func createWebViewConfiguration() -> WKWebViewConfiguration {
+        let configuration = WKWebViewConfiguration()
+        configuration.websiteDataStore = .default()
 
-extension PlayBoldWebLoader: WKNavigationDelegate {
-    /// Обработка ошибок при навигации
-    func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
-        handleNavigationError(error)
-    }
+        // Включаем поддержку медиа-функций
+        configuration.allowsInlineMediaPlayback = true
+        configuration.mediaTypesRequiringUserActionForPlayback = []
 
-    /// Обработка ошибок при provisional навигации
-    func webView(
-        _ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!,
-        withError error: Error
-    ) {
-        handleNavigationError(error)
-    }
+        // Настройки для доступа к камере и микрофону
+        let preferences = WKWebpagePreferences()
+        preferences.allowsContentJavaScript = true
+        configuration.defaultWebpagePreferences = preferences
 
-    // MARK: - Приватные методы обработки ошибок
+        // Additional tuning for smoother loading
+        configuration.suppressesIncrementalRendering = false
 
-    /// Обобщенный метод обработки ошибок навигации
-    private func handleNavigationError(_ error: Error) {
-        state = .failure(reason: error.localizedDescription)
+        return configuration
     }
 }
 
-// MARK: - Расширения для улучшения функциональности
+// MARK: - Расширение для типов данных
 
-extension PlayBoldWebLoader {
-    /// Создание загрузчика с безопасным URL
-    convenience init?(urlString: String) {
-        guard let url = URL(string: urlString) else { return nil }
-        self.init(resourceURL: url)
-    }
+extension String {
+    static let diskCache = WKWebsiteDataTypeDiskCache
+    static let memoryCache = WKWebsiteDataTypeMemoryCache
+    static let cookies = WKWebsiteDataTypeCookies
+    static let localStorage = WKWebsiteDataTypeLocalStorage
 }

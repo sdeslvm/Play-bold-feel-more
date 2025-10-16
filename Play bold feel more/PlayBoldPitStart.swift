@@ -1,180 +1,79 @@
-import SwiftUI
+import Foundation
 import WebKit
 
-// MARK: - Протоколы и расширения
+class PlayBoldWebCoordinator: NSObject, WKNavigationDelegate, WKUIDelegate {
+    private let callback: (PlayBoldWebStatus) -> Void
+    private var didStart = false
 
-/// Протокол для создания градиентных представлений
-protocol GradientProviding {
-    func createGradientLayer() -> CAGradientLayer
-}
-
-// MARK: - Улучшенный контейнер с градиентом
-
-/// Кастомный контейнер с градиентным фоном
-final class GradientContainerView: UIView, GradientProviding {
-    // MARK: - Приватные свойства
-
-    private let gradientLayer = CAGradientLayer()
-
-    // MARK: - Инициализаторы
-
-    override init(frame: CGRect) {
-        super.init(frame: frame)
-        setupView()
+    init(onStatus: @escaping (PlayBoldWebStatus) -> Void) {
+        self.callback = onStatus
     }
 
-    required init?(coder: NSCoder) {
-        super.init(coder: coder)
-        setupView()
+    func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
+        if !didStart { callback(.progressing(progress: 0.0)) }
     }
 
-    // MARK: - Методы настройки
-
-    private func setupView() {
-        layer.insertSublayer(createGradientLayer(), at: 0)
+    func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
+        didStart = false
     }
 
-    /// Создание градиентного слоя
-    func createGradientLayer() -> CAGradientLayer {
-        let layer = CAGradientLayer()
-        layer.colors = [
-            UIColor(hex: "#1BD8FD").cgColor,
-            UIColor(hex: "#0FC9FA").cgColor,
-        ]
-        layer.startPoint = CGPoint(x: 0, y: 0)
-        layer.endPoint = CGPoint(x: 1, y: 1)
-        return layer
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        callback(.finished)
     }
 
-    // MARK: - Обновление слоя
-
-    override func layoutSubviews() {
-        super.layoutSubviews()
-        gradientLayer.frame = bounds
+    func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+        callback(.failure(reason: error.localizedDescription))
     }
-}
 
-// MARK: - Расширения для цветов
-
-extension UIColor {
-    /// Инициализатор цвета из HEX-строки с улучшенной обработкой
-    convenience init(hex hexString: String) {
-        let sanitizedHex =
-            hexString
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .replacingOccurrences(of: "#", with: "")
-            .uppercased()
-
-        var colorValue: UInt64 = 0
-        Scanner(string: sanitizedHex).scanHexInt64(&colorValue)
-
-        let redComponent = CGFloat((colorValue & 0xFF0000) >> 16) / 255.0
-        let greenComponent = CGFloat((colorValue & 0x00FF00) >> 8) / 255.0
-        let blueComponent = CGFloat(colorValue & 0x0000FF) / 255.0
-
-        self.init(red: redComponent, green: greenComponent, blue: blueComponent, alpha: 1.0)
+    func webView(
+        _ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!,
+        withError error: Error
+    ) {
+        callback(.failure(reason: error.localizedDescription))
     }
-}
 
-// MARK: - Представление веб-вида
-
-struct PlayBoldWebViewBox: UIViewRepresentable {
-    // MARK: - Свойства
-
-    @ObservedObject var loader: PlayBoldWebLoader
-
-    // MARK: - Координатор
-
-    func makeCoordinator() -> PlayBoldWebCoordinator {
-        PlayBoldWebCoordinator { [weak loader] status in
-            DispatchQueue.main.async {
-                loader?.state = status
-            }
+    func webView(
+        _ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction,
+        decisionHandler: @escaping (WKNavigationActionPolicy) -> Void
+    ) {
+        if navigationAction.navigationType == .other && webView.url != nil {
+            didStart = true
         }
+        decisionHandler(.allow)
     }
 
-    // MARK: - Создание представления
+    // MARK: - WKUIDelegate методы для поддержки камеры и микрофона
 
-    func makeUIView(context: Context) -> WKWebView {
-        let configuration = createWebViewConfiguration()
-        let webView = WKWebView(frame: .zero, configuration: configuration)
-
-        setupWebViewAppearance(webView)
-        setupContainerView(with: webView)
-
-        webView.navigationDelegate = context.coordinator
-        webView.uiDelegate = context.coordinator
-        loader.attachWebView { webView }
-
-        return webView
+    func webView(
+        _ webView: WKWebView, requestMediaCapturePermissionFor origin: WKSecurityOrigin,
+        initiatedByFrame frame: WKFrameInfo, type: WKMediaCaptureType,
+        decisionHandler: @escaping (WKPermissionDecision) -> Void
+    ) {
+        // Автоматически разрешаем доступ к камере и микрофону
+        decisionHandler(.grant)
     }
 
-    func updateUIView(_ uiView: WKWebView, context: Context) {
-        // Here you can update the WKWebView as needed, e.g., reload content when the loader changes.
-        // For now, this can be left empty or you can update it as per loader's state if needed.
+    @available(iOS 15.0, *)
+    func webView(
+        _ webView: WKWebView,
+        requestDeviceOrientationAndMotionPermissionFor origin: WKSecurityOrigin,
+        initiatedByFrame frame: WKFrameInfo,
+        decisionHandler: @escaping (WKPermissionDecision) -> Void
+    ) {
+        decisionHandler(.grant)
     }
 
-    // MARK: - Приватные методы настройки
-
-    private func createWebViewConfiguration() -> WKWebViewConfiguration {
-        let configuration = WKWebViewConfiguration()
-        configuration.websiteDataStore = .default()
-
-        // Включаем поддержку медиа-функций
-        configuration.allowsInlineMediaPlayback = true
-        configuration.mediaTypesRequiringUserActionForPlayback = []
-
-        // Настройки для доступа к камере и микрофону
-        let preferences = WKWebpagePreferences()
-        preferences.allowsContentJavaScript = true
-        configuration.defaultWebpagePreferences = preferences
-
-        // Дополнительные настройки для камеры
-        configuration.suppressesIncrementalRendering = false
-        configuration.processPool = WKProcessPool()
-
-        return configuration
+    func webView(
+        _ webView: WKWebView, runJavaScriptAlertPanelWithMessage message: String,
+        initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping () -> Void
+    ) {
+        completionHandler()
     }
 
-    private func setupWebViewAppearance(_ webView: WKWebView) {
-        webView.isOpaque = false
-        webView.scrollView.bounces = false
-        webView.scrollView.isScrollEnabled = true
-        webView.allowsBackForwardNavigationGestures = true
-
-        // Важные настройки для работы с камерой
-        webView.configuration.preferences.setValue(true, forKey: "allowFileAccessFromFileURLs")
-        webView.configuration.setValue(true, forKey: "allowUniversalAccessFromFileURLs")
+    func webView(
+        _ webView: WKWebView, runJavaScriptConfirmPanelWithMessage message: String,
+        initiatedByFrame: WKFrameInfo, completionHandler: @escaping (Bool) -> Void
+    ) {
+        completionHandler(true)
     }
-
-    private func setupContainerView(with webView: WKWebView) {
-        let containerView = GradientContainerView()
-        containerView.addSubview(webView)
-
-        webView.frame = containerView.bounds
-        webView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-    }
-
-    private func clearWebsiteData() {
-        let dataTypes: Set<String> = [
-            .diskCache,
-            .memoryCache,
-            .cookies,
-            .localStorage,
-        ]
-
-        WKWebsiteDataStore.default().removeData(
-            ofTypes: dataTypes,
-            modifiedSince: .distantPast
-        ) {}
-    }
-}
-
-// MARK: - Расширение для типов данных
-
-extension String {
-    static let diskCache = WKWebsiteDataTypeDiskCache
-    static let memoryCache = WKWebsiteDataTypeMemoryCache
-    static let cookies = WKWebsiteDataTypeCookies
-    static let localStorage = WKWebsiteDataTypeLocalStorage
 }

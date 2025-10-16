@@ -1,79 +1,51 @@
 import Foundation
+import SwiftUI
 
-// MARK: - Протоколы и расширения
+struct PlayBoldEntryScreen: View {
+    @StateObject private var loader: PlayBoldWebLoader
 
-/// Протокол для статусов с возможностью сравнения
-protocol WebStatusComparable {
-    func isEquivalent(to other: Self) -> Bool
-}
-
-// MARK: - Улучшенное перечисление статусов
-
-/// Перечисление статусов веб-соединения с расширенной функциональностью
-enum PlayBoldWebStatus: Equatable, WebStatusComparable {
-    case standby
-    case progressing(progress: Double)
-    case finished
-    case failure(reason: String)
-    case noConnection
-
-    // MARK: - Пользовательские методы сравнения
-
-    /// Проверка эквивалентности статусов с точным сравнением
-    func isEquivalent(to other: PlayBoldWebStatus) -> Bool {
-        switch (self, other) {
-        case (.standby, .standby),
-            (.finished, .finished),
-            (.noConnection, .noConnection):
-            return true
-        case let (.progressing(a), .progressing(b)):
-            return abs(a - b) < 0.0001
-        case let (.failure(reasonA), .failure(reasonB)):
-            return reasonA == reasonB
-        default:
-            return false
-        }
+    init(loader: PlayBoldWebLoader) {
+        _loader = StateObject(wrappedValue: loader)
     }
 
-    // MARK: - Вычисляемые свойства
-
-    /// Текущий прогресс подключения
-    var progress: Double? {
-        guard case let .progressing(value) = self else { return nil }
-        return value
-    }
-
-    /// Индикатор успешного завершения
-    var isSuccessful: Bool {
-        switch self {
-        case .finished: return true
-        default: return false
-        }
-    }
-
-    /// Индикатор наличия ошибки
-    var hasError: Bool {
-        switch self {
-        case .failure, .noConnection: return true
-        default: return false
+    var body: some View {
+        ZStack {
+            PlayBoldWebViewBox(loader: loader)
+                .opacity(loader.state == .finished ? 1 : 0.5)
+            switch loader.state {
+            case .progressing(let percent):
+                PlayBoldProgressIndicator(value: percent)
+            case .failure(let err):
+                PlayBoldErrorIndicator(err: err)  // err теперь String
+            case .noConnection:
+                PlayBoldOfflineIndicator()
+            default:
+                EmptyView()
+            }
         }
     }
 }
 
-// MARK: - Расширения для улучшения функциональности
-
-extension PlayBoldWebStatus {
-    /// Безопасное извлечение причины ошибки
-    var errorReason: String? {
-        guard case let .failure(reason) = self else { return nil }
-        return reason
+private struct PlayBoldProgressIndicator: View {
+    let value: Double
+    var body: some View {
+        GeometryReader { geo in
+            PlayBoldLoadingOverlay(progress: value)
+                .frame(width: geo.size.width, height: geo.size.height)
+                .background(Color.black)
+        }
     }
 }
 
-// MARK: - Кастомная реализация Equatable
+private struct PlayBoldErrorIndicator: View {
+    let err: String  // было Error, стало String
+    var body: some View {
+        Text("Ошибка: \(err)").foregroundColor(.red)
+    }
+}
 
-extension PlayBoldWebStatus {
-    static func == (lhs: PlayBoldWebStatus, rhs: PlayBoldWebStatus) -> Bool {
-        lhs.isEquivalent(to: rhs)
+private struct PlayBoldOfflineIndicator: View {
+    var body: some View {
+        Text("Нет соединения").foregroundColor(.gray)
     }
 }

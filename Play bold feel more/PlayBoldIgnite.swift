@@ -1,79 +1,130 @@
 import Foundation
+import SwiftUI
 import WebKit
 
-class PlayBoldWebCoordinator: NSObject, WKNavigationDelegate, WKUIDelegate {
-    private let callback: (PlayBoldWebStatus) -> Void
-    private var didStart = false
+// MARK: - Протоколы
 
-    init(onStatus: @escaping (PlayBoldWebStatus) -> Void) {
-        self.callback = onStatus
-    }
+/// Протокол для состояний загрузки с расширенной функциональностью
+protocol PlayBoldLoadStateRepresentable {
+    var type: PlayBoldLoadState.StateType { get }
+    var percent: Double? { get }
+    var error: String? { get }
 
-    func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
-        if !didStart { callback(.progressing(progress: 0.0)) }
-    }
+    func isEqual(to other: Self) -> Bool
+}
 
-    func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
-        didStart = false
-    }
+// MARK: - Улучшенная структура состояния загрузки
 
-    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-        callback(.finished)
-    }
+/// Структура для представления состояний веб-загрузки
+struct PlayBoldLoadState: Equatable, PlayBoldLoadStateRepresentable {
+    // MARK: - Перечисление типов состояний
 
-    func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
-        callback(.failure(reason: error.localizedDescription))
-    }
+    /// Типы состояний загрузки с порядковым номером
+    enum StateType: Int, CaseIterable {
+        case idle = 0
+        case progress
+        case success
+        case error
+        case offline
 
-    func webView(
-        _ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!,
-        withError error: Error
-    ) {
-        callback(.failure(reason: error.localizedDescription))
-    }
-
-    func webView(
-        _ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction,
-        decisionHandler: @escaping (WKNavigationActionPolicy) -> Void
-    ) {
-        if navigationAction.navigationType == .other && webView.url != nil {
-            didStart = true
+        /// Человекочитаемое описание состояния
+        var description: String {
+            switch self {
+            case .idle: return "Ожидание"
+            case .progress: return "Загрузка"
+            case .success: return "Успешно"
+            case .error: return "Ошибка"
+            case .offline: return "Нет подключения"
+            }
         }
-        decisionHandler(.allow)
     }
 
-    // MARK: - WKUIDelegate методы для поддержки камеры и микрофона
+    // MARK: - Свойства
 
-    func webView(
-        _ webView: WKWebView, requestMediaCapturePermissionFor origin: WKSecurityOrigin,
-        initiatedByFrame frame: WKFrameInfo, type: WKMediaCaptureType,
-        decisionHandler: @escaping (WKPermissionDecision) -> Void
-    ) {
-        // Автоматически разрешаем доступ к камере и микрофону
-        decisionHandler(.grant)
+    let type: StateType
+    let percent: Double?
+    let error: String?
+
+    // MARK: - Статические конструкторы
+
+    /// Создание состояния простоя
+    static func idle() -> PlayBoldLoadState {
+        PlayBoldLoadState(type: .idle, percent: nil, error: nil)
     }
 
-    @available(iOS 15.0, *)
-    func webView(
-        _ webView: WKWebView,
-        requestDeviceOrientationAndMotionPermissionFor origin: WKSecurityOrigin,
-        initiatedByFrame frame: WKFrameInfo,
-        decisionHandler: @escaping (WKPermissionDecision) -> Void
-    ) {
-        decisionHandler(.grant)
+    /// Создание состояния прогресса
+    static func progress(_ percent: Double) -> PlayBoldLoadState {
+        PlayBoldLoadState(type: .progress, percent: percent, error: nil)
     }
 
-    func webView(
-        _ webView: WKWebView, runJavaScriptAlertPanelWithMessage message: String,
-        initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping () -> Void
-    ) {
-        completionHandler()
+    /// Создание состояния успеха
+    static func success() -> PlayBoldLoadState {
+        PlayBoldLoadState(type: .success, percent: nil, error: nil)
     }
 
-    func webView(
-        _ webView: WKWebView, runJavaScriptConfirmPanelWithMessage message: String,
-        initiatedByFrame: WKFrameInfo, completionHandler: @escaping (Bool) -> Void
-    ) {
-        completionHandler(true)
+    /// Создание состояния ошибки
+    static func error(_ err: String) -> PlayBoldLoadState {
+        PlayBoldLoadState(type: .error, percent: nil, error: err)
+    }
+
+    /// Создание состояния отсутствия подключения
+    static func offline() -> PlayBoldLoadState {
+        PlayBoldLoadState(type: .offline, percent: nil, error: nil)
+    }
+
+    // MARK: - Методы сравнения
+
+    /// Пользовательская реализация сравнения
+    func isEqual(to other: PlayBoldLoadState) -> Bool {
+        guard type == other.type else { return false }
+
+        switch type {
+        case .progress:
+            return percent == other.percent
+        case .error:
+            return error == other.error
+        default:
+            return true
+        }
+    }
+
+    // MARK: - Реализация Equatable
+
+    static func == (lhs: PlayBoldLoadState, rhs: PlayBoldLoadState) -> Bool {
+        lhs.isEqual(to: rhs)
+    }
+}
+
+// MARK: - Расширения для улучшения функциональности
+
+extension PlayBoldLoadState {
+    /// Проверка текущего состояния
+    var isLoading: Bool {
+        type == .progress
+    }
+
+    /// Проверка успешного состояния
+    var isSuccessful: Bool {
+        type == .success
+    }
+
+    /// Проверка состояния ошибки
+    var hasError: Bool {
+        type == .error
+    }
+}
+
+// MARK: - Расширение для отладки
+
+extension PlayBoldLoadState: CustomStringConvertible {
+    /// Строковое представление состояния
+    var description: String {
+        switch type {
+        case .idle: return "Состояние: Ожидание"
+        case .progress: return "Состояние: Загрузка (\(percent?.formatted() ?? "0")%)"
+        case .success: return "Состояние: Успешно"
+        case .error: return "Состояние: Ошибка (\(error ?? "Неизвестная ошибка"))"
+        case .offline: return "Состояние: Нет подключения"
+        }
     }
 }

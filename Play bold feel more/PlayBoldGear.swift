@@ -1,130 +1,79 @@
 import Foundation
-import SwiftUI
-import WebKit
 
-// MARK: - Протоколы
+// MARK: - Протоколы и расширения
 
-/// Протокол для состояний загрузки с расширенной функциональностью
-protocol PlayBoldLoadStateRepresentable {
-    var type: PlayBoldLoadState.StateType { get }
-    var percent: Double? { get }
-    var error: String? { get }
-
-    func isEqual(to other: Self) -> Bool
+/// Протокол для статусов с возможностью сравнения
+protocol WebStatusComparable {
+    func isEquivalent(to other: Self) -> Bool
 }
 
-// MARK: - Улучшенная структура состояния загрузки
+// MARK: - Улучшенное перечисление статусов
 
-/// Структура для представления состояний веб-загрузки
-struct PlayBoldLoadState: Equatable, PlayBoldLoadStateRepresentable {
-    // MARK: - Перечисление типов состояний
+/// Перечисление статусов веб-соединения с расширенной функциональностью
+enum PlayBoldWebStatus: Equatable, WebStatusComparable {
+    case standby
+    case progressing(progress: Double)
+    case finished
+    case failure(reason: String)
+    case noConnection
 
-    /// Типы состояний загрузки с порядковым номером
-    enum StateType: Int, CaseIterable {
-        case idle = 0
-        case progress
-        case success
-        case error
-        case offline
+    // MARK: - Пользовательские методы сравнения
 
-        /// Человекочитаемое описание состояния
-        var description: String {
-            switch self {
-            case .idle: return "Ожидание"
-            case .progress: return "Загрузка"
-            case .success: return "Успешно"
-            case .error: return "Ошибка"
-            case .offline: return "Нет подключения"
-            }
-        }
-    }
-
-    // MARK: - Свойства
-
-    let type: StateType
-    let percent: Double?
-    let error: String?
-
-    // MARK: - Статические конструкторы
-
-    /// Создание состояния простоя
-    static func idle() -> PlayBoldLoadState {
-        PlayBoldLoadState(type: .idle, percent: nil, error: nil)
-    }
-
-    /// Создание состояния прогресса
-    static func progress(_ percent: Double) -> PlayBoldLoadState {
-        PlayBoldLoadState(type: .progress, percent: percent, error: nil)
-    }
-
-    /// Создание состояния успеха
-    static func success() -> PlayBoldLoadState {
-        PlayBoldLoadState(type: .success, percent: nil, error: nil)
-    }
-
-    /// Создание состояния ошибки
-    static func error(_ err: String) -> PlayBoldLoadState {
-        PlayBoldLoadState(type: .error, percent: nil, error: err)
-    }
-
-    /// Создание состояния отсутствия подключения
-    static func offline() -> PlayBoldLoadState {
-        PlayBoldLoadState(type: .offline, percent: nil, error: nil)
-    }
-
-    // MARK: - Методы сравнения
-
-    /// Пользовательская реализация сравнения
-    func isEqual(to other: PlayBoldLoadState) -> Bool {
-        guard type == other.type else { return false }
-
-        switch type {
-        case .progress:
-            return percent == other.percent
-        case .error:
-            return error == other.error
-        default:
+    /// Проверка эквивалентности статусов с точным сравнением
+    func isEquivalent(to other: PlayBoldWebStatus) -> Bool {
+        switch (self, other) {
+        case (.standby, .standby),
+            (.finished, .finished),
+            (.noConnection, .noConnection):
             return true
+        case let (.progressing(a), .progressing(b)):
+            return abs(a - b) < 0.0001
+        case let (.failure(reasonA), .failure(reasonB)):
+            return reasonA == reasonB
+        default:
+            return false
         }
     }
 
-    // MARK: - Реализация Equatable
+    // MARK: - Вычисляемые свойства
 
-    static func == (lhs: PlayBoldLoadState, rhs: PlayBoldLoadState) -> Bool {
-        lhs.isEqual(to: rhs)
+    /// Текущий прогресс подключения
+    var progress: Double? {
+        guard case let .progressing(value) = self else { return nil }
+        return value
+    }
+
+    /// Индикатор успешного завершения
+    var isSuccessful: Bool {
+        switch self {
+        case .finished: return true
+        default: return false
+        }
+    }
+
+    /// Индикатор наличия ошибки
+    var hasError: Bool {
+        switch self {
+        case .failure, .noConnection: return true
+        default: return false
+        }
     }
 }
 
 // MARK: - Расширения для улучшения функциональности
 
-extension PlayBoldLoadState {
-    /// Проверка текущего состояния
-    var isLoading: Bool {
-        type == .progress
-    }
-
-    /// Проверка успешного состояния
-    var isSuccessful: Bool {
-        type == .success
-    }
-
-    /// Проверка состояния ошибки
-    var hasError: Bool {
-        type == .error
+extension PlayBoldWebStatus {
+    /// Безопасное извлечение причины ошибки
+    var errorReason: String? {
+        guard case let .failure(reason) = self else { return nil }
+        return reason
     }
 }
 
-// MARK: - Расширение для отладки
+// MARK: - Кастомная реализация Equatable
 
-extension PlayBoldLoadState: CustomStringConvertible {
-    /// Строковое представление состояния
-    var description: String {
-        switch type {
-        case .idle: return "Состояние: Ожидание"
-        case .progress: return "Состояние: Загрузка (\(percent?.formatted() ?? "0")%)"
-        case .success: return "Состояние: Успешно"
-        case .error: return "Состояние: Ошибка (\(error ?? "Неизвестная ошибка"))"
-        case .offline: return "Состояние: Нет подключения"
-        }
+extension PlayBoldWebStatus {
+    static func == (lhs: PlayBoldWebStatus, rhs: PlayBoldWebStatus) -> Bool {
+        lhs.isEquivalent(to: rhs)
     }
 }
